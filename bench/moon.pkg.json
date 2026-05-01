@@ -1,0 +1,7 @@
+{
+  "is_main": true,
+  "import": [
+    "tiye/recollect",
+    { "path": "moonbitlang/core/json", "alias": "json" }
+  ]
+}
