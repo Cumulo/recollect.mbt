@@ -1,0 +1,39 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "tiye/cumulo/recollect"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn apply_patch(Json, PatchOp) -> Json
+
+pub fn apply_patches(Json, Array[PatchOp]) -> Json
+
+pub fn[T : ToJson + @json.FromJson] apply_to_value(T, Array[PatchOp]) -> T raise @json.JsonDecodeError
+
+pub fn diff_json(Json, Json) -> Array[PatchOp]
+
+pub fn[T : ToJson] diff_value(T, T) -> Array[PatchOp]
+
+// Errors
+
+// Types and methods
+pub(all) enum PatchOp {
+  Set(path~ : Array[PathSegment], value~ : Json)
+  Remove(path~ : Array[PathSegment])
+  Insert(path~ : Array[PathSegment], index~ : Int, value~ : Json)
+  Delete(path~ : Array[PathSegment], index~ : Int)
+  Move(path~ : Array[PathSegment], from_index~ : Int, to_index~ : Int)
+} derive(Eq, ToJson, @debug.Debug, @json.FromJson)
+
+pub(all) enum PathSegment {
+  Field(String)
+  Index(Int)
+} derive(Eq, ToJson, @debug.Debug, @json.FromJson)
+
+// Type aliases
+
+// Traits
+
