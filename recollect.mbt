@@ -1,10 +1,33 @@
 ///|
+/// A single segment in a path through a `Json` tree.
+///
+/// Paths are sequences of segments used by `PatchOp` to address nested
+/// locations. `Field("key")` traverses into a JSON object; `Index(n)`
+/// traverses into a JSON array.
 pub(all) enum PathSegment {
   Field(String)
   Index(Int)
 } derive(Eq, Debug, FromJson, ToJson)
 
 ///|
+/// A single structural edit operation on a `Json` tree.
+///
+/// Patch operations are always **non-destructive** with respect to the input:
+/// every `apply_*` function returns a new tree rather than mutating the
+/// original. This makes the patch format safe to use with immutable-data
+/// architectures (e.g. Cumulo server state, Respo stores).
+///
+/// | Variant | Meaning |
+/// |---------|---------|
+/// | `Set`    | Overwrite a value at `path` (creates intermediate nodes if absent) |
+/// | `Remove` | Delete the field or array element addressed by `path` |
+/// | `Insert` | Splice a new element into the array at `path` before `index` |
+/// | `Delete` | Remove the element at `index` from the array at `path` |
+/// | `Move`   | Re-order an element within the array at `path` |
+///
+/// `Insert`/`Delete`/`Move` are only emitted for **keyed arrays** — arrays
+/// whose every element is a JSON object with a unique string `"id"` field.
+/// Plain arrays fall back to positional `Set` patches.
 pub(all) enum PatchOp {
   Set(path~ : Array[PathSegment], value~ : Json)
   Remove(path~ : Array[PathSegment])
@@ -262,6 +285,24 @@ fn collect_json_diff(
 }
 
 ///|
+/// Compute a minimal sequence of `PatchOp`s that transforms `old_json` into
+/// `new_json`.
+///
+/// The diff is **structural**: objects are compared field-by-field, arrays are
+/// compared element-by-element (or by `"id"` key when all elements carry
+/// unique string ids). Unchanged subtrees produce no patches.
+///
+/// The result can be serialized (via `ToJson`/`FromJson` on `PatchOp`) and
+/// sent over a network, then applied on the other side with `apply_patches`.
+///
+/// ```moonbit
+/// let patches = diff_json(
+///   { "count": 1 },
+///   { "count": 2, "label": "hi" },
+/// )
+/// // patches: [Set(path=[Field("count")], value=2),
+/// //           Set(path=[Field("label")], value="hi")]
+/// ```
 pub fn diff_json(old_json : Json, new_json : Json) -> Array[PatchOp] {
   let patches = Array::new()
   collect_json_diff([], old_json, new_json, patches)
@@ -269,6 +310,17 @@ pub fn diff_json(old_json : Json, new_json : Json) -> Array[PatchOp] {
 }
 
 ///|
+/// Compute a minimal patch sequence by first serializing both values to `Json`
+/// via `ToJson`, then delegating to `diff_json`.
+///
+/// This is the typical entry point when working with typed MoonBit structs.
+/// The type `T` must derive (or implement) `ToJson`; it does **not** need
+/// `FromJson` at the diff stage.
+///
+/// ```moonbit
+/// struct Counter { value : Int } derive(ToJson)
+/// let patches = diff_value({ value: 1 }, { value: 2 })
+/// ```
 pub fn[T : ToJson] diff_value(old_value : T, new_value : T) -> Array[PatchOp] {
   diff_json(old_value.to_json(), new_value.to_json())
 }
@@ -443,6 +495,15 @@ fn apply_move(
 }
 
 ///|
+/// Apply a single `PatchOp` to `root` and return the resulting `Json` tree.
+///
+/// The input `root` is **never mutated** — all intermediate nodes on the
+/// affected path are copied, producing a new tree that shares unchanged
+/// subtrees with the original. This structural sharing makes the function
+/// safe to use in immutable-data architectures.
+///
+/// Panics (via `abort`) if the path in the patch is structurally inconsistent
+/// with the tree (e.g. `Field` segment on an array node).
 pub fn apply_patch(root : Json, patch : PatchOp) -> Json {
   match patch {
     Set(path~, value~) => apply_set(root, path, 0, value)
@@ -455,6 +516,17 @@ pub fn apply_patch(root : Json, patch : PatchOp) -> Json {
 }
 
 ///|
+/// Apply a sequence of `PatchOp`s to `root`, threading the result of each
+/// operation as the input to the next.
+///
+/// Like `apply_patch`, the original `root` is never mutated.
+///
+/// An empty `patches` slice returns `root` unchanged.
+///
+/// ```moonbit
+/// let new_json = apply_patches(old_json, diff_json(old_json, new_json))
+/// assert_eq(new_json, new_json)
+/// ```
 pub fn apply_patches(root : Json, patches : Array[PatchOp]) -> Json {
   let mut current = root
   for patch in patches {
@@ -464,6 +536,23 @@ pub fn apply_patches(root : Json, patches : Array[PatchOp]) -> Json {
 }
 
 ///|
+/// Apply `patches` to a typed MoonBit value by round-tripping through `Json`.
+///
+/// The value is serialized to `Json` via `ToJson`, the patches are applied
+/// with `apply_patches`, and the result is deserialized back to `T` via
+/// `FromJson`. Raises `@json.JsonDecodeError` if the patched JSON cannot be
+/// decoded into `T`.
+///
+/// This is the primary function used by Cumulo-style clients to advance their
+/// local state when receiving a `Delta` event from the server:
+///
+/// ```moonbit nocheck
+/// let new_remote = @recollect.apply_to_value(old_remote, patches)
+///   catch { err => ... }
+/// ```
+///
+/// Because both serialization and deserialization produce new values, the
+/// original `value` is never mutated.
 pub fn[T : ToJson + FromJson] apply_to_value(
   value : T,
   patches : Array[PatchOp],
