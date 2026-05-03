@@ -1,5 +1,6 @@
 {
   "is_main": true,
+  "supported-targets": "js",
   "import": [
     "tiye/recollect",
     { "path": "moonbitlang/core/json", "alias": "json" }
